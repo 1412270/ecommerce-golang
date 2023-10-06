@@ -2,19 +2,40 @@ package controllers
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"time"
 
+	"github.com/1412270/ecommerce-golang/database"
 	"github.com/1412270/ecommerce-golang/models"
 	"github.com/gin-gonic/gin"
+	"github.com/go-playground/validator"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
+	"golang.org/x/crypto/bcrypt"
 )
 
-func HashPassword(password string) string {
+var UserCollection *mongo.Collection = database.UserData(database.Client, "Users")
+var ProductCollection *mongo.Collection = database.ProductData(database.Client, "Products")
+var Validate = validator.New()
 
+func HashPassword(password string) string {
+	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 14)
+	if err != nil {
+		log.Panic(err)
+	}
+	return string(bytes)
 }
 
 func VerifyPassword(userPassword string, givenPassword string) (bool, string) {
+	err := bcrypt.CompareHashAndPassword([]byte(givenPassword), []byte(userPassword))
+	valid := true
+	msg := ""
 
+	if err != nil {
+		msg
+	}
 }
 
 func Signup() gin.HandlerFunc {
@@ -28,6 +49,59 @@ func Signup() gin.HandlerFunc {
 			return
 		}
 
-		validateErr := validate.Struct(user)
+		validateErr := Validate.Struct(user)
+		if validateErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": validateErr.Error()})
+			return
+		}
+
+		count, err := UserCollection.CountDocuments(ctx, bson.M{"email": user.Email})
+		if err != nil {
+			log.Panic(err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err})
+			return
+		}
+
+		if count > 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "user already exits"})
+		}
+
+		count, err = UserCollection.CountDocuments(ctx, bson.M{"phone": user.Phone})
+
+		defer cancel()
+
+		if err != nil {
+			log.Panic(err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err})
+			return
+		}
+
+		if count > 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "this phone is already in use"})
+			return
+		}
+
+		password := HashPassword(*user.Password)
+		user.Password = &password
+
+		user.Created_At, _ = time.Parse(time.RFC3339, time.Now().Format(time.RFC3339))
+		user.Updated_At, _ = time.Parse(time.RFC3339, time.Now().Format(time.RFC3339))
+		user.ID = primitive.NewObjectID()
+		user.User_ID = user.ID.Hex()
+		token, refreshToken, _ := generate.TokenGenerator(*user.Email, *user.First_Name, *user.Last_Name, user.User_ID)
+		user.Token = &token
+		user.Refresh_Token = &refreshToken
+		user.User_Cart = make([]models.ProductUser, 0)
+		user.Address_Details = make([]models.Address, 0)
+		user.Order_Status = make([]models.Order, 0)
+		_, insertErr := UserCollection.InsertOne(ctx, user)
+		if insertErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "the user did not get created"})
+			return
+		}
+
+		defer cancel()
+
+		c.JSON(http.StatusCreated, "Successfully signed in")
 	}
 }
